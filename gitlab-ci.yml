@@ -1,0 +1,70 @@
+workflow:
+  rules:
+    - if: '$CI_PIPELINE_SOURCE == "merge_request_event"'
+    - if: '$CI_COMMIT_BRANCH && $CI_OPEN_MERGE_REQUESTS'
+      when: never
+    - if: '$CI_COMMIT_BRANCH'
+    - if: '$CI_COMMIT_TAG'
+
+stages:
+  - verify
+  - package
+  - container
+
+variables:
+  GRADLE_USER_HOME: "$CI_PROJECT_DIR/.gradle"
+  GRADLE_OPTS: "-Dorg.gradle.daemon=false"
+
+cache:
+  key: "$CI_COMMIT_REF_SLUG"
+  paths:
+    - .gradle/wrapper
+    - .gradle/caches
+
+verify:
+  stage: verify
+  image: gradle:8.14.2-jdk21
+  rules:
+    - if: '$CI_PIPELINE_SOURCE == "merge_request_event"'
+    - if: '$CI_COMMIT_BRANCH'
+    - if: '$CI_COMMIT_TAG'
+  script:
+    - ./gradlew --no-daemon clean test jacocoTestReport jacocoTestCoverageVerification
+  artifacts:
+    when: always
+    reports:
+      junit: pvsone/core/servers/atlas-execution-processor/build/test-results/test/*.xml
+      coverage_report:
+        coverage_format: jacoco
+        path: pvsone/core/servers/atlas-execution-processor/build/reports/jacoco/test/jacocoTestReport.xml
+    paths:
+      - pvsone/core/servers/atlas-execution-processor/build/reports/
+      - pvsone/core/servers/atlas-execution-processor/build/test-results/
+
+package:
+  stage: package
+  image: gradle:8.14.2-jdk21
+  rules:
+    - if: '$CI_PIPELINE_SOURCE == "merge_request_event"'
+    - if: '$CI_COMMIT_TAG'
+    - if: '$CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH'
+  script:
+    - ./gradlew --no-daemon :pvsone:core:servers:atlas-execution-processor:bootJar
+  artifacts:
+    paths:
+      - pvsone/core/servers/atlas-execution-processor/build/libs/*.jar
+
+container:
+  stage: container
+  image: docker:27
+  services:
+    - docker:27-dind
+  variables:
+    DOCKER_TLS_CERTDIR: "/certs"
+  rules:
+    - if: '$CI_COMMIT_TAG'
+    - if: '$CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH'
+  script:
+    - echo "$CI_REGISTRY_PASSWORD" | docker login -u "$CI_REGISTRY_USER" --password-stdin "$CI_REGISTRY"
+    - docker build -t "$CI_REGISTRY_IMAGE:$CI_COMMIT_SHA" .
+    - docker push "$CI_REGISTRY_IMAGE:$CI_COMMIT_SHA"
